@@ -23,6 +23,11 @@
 - **违规自动处理**：上报位置含"消防通道"→ 消防通道堆放违规（罚 200）；勾选混入生活垃圾 → 违规（罚 100）。违规经 MQ 触发押金扣款并生成施工队罚款账单；施工队缴清罚款后自动返还业主押金。
 - **称重异常**：净重与按袋预估（25kg/袋）偏差超 20% → 标记异常并自动生成称重异常投诉。
 - **车辆迟到**：实际到场晚于计划 30 分钟 → 迟到标记；若此时垃圾点已超容量，自动生成溢出投诉，并计入清运公司履约看板。
+- **消防通道违规堆放处置（夜间巡查）**：物业夜巡发现施工队把木板等堆到消防通道，`POST /api/fire-lane/rectifications` 依据**房号装修登记**自动带出施工队名称与联系方式，连同**现场照片、巡查时间**生成整改任务（默认限 24 小时移走）。
+  - **限期内移走**：押金不扣款，只记录一次警告并写入施工队信用（扣 5 信用分）。
+  - **影响消防通道 / 邻居投诉 / 二次巡查仍未移走**：按规则扣款（基础 200 + 超期每满 12 小时加扣 100，加扣封顶 500；邻居投诉 +200；二次巡查未移走 +200；单任务封顶 1000），押金优先扣除、不足部分物业垫付，生成施工队罚款账单，并把整改记录写入该施工队信用（扣 20 信用分）。
+  - **超过时限仍未完成**：定时任务（默认每 60 秒扫描）自动通知**物业经理与业主本人**，并把**消防通道占用时长、影响范围、二次巡查结果**作为后续扣款依据；邻居发起"占用消防通道"投诉（`type=FIRE_LANE` 且带 `targetRegistrationId`）也会立即触发在办整改任务按规则扣款。
+  - 施工队缴清罚款账单后，押金按既有规则返还业主；物业可对误报任务 `waive` 撤销。
 - **计费**：业主账单 = 正常袋×8 元 + 临时加袋×8×1.5 元，押金优先抵扣、不足部分自动生成物业垫付单；清运公司结算 = 净重(吨)×120 元。
 - **费用争议**：业主投诉费用争议 → 账单自动冻结（DISPUTED）→ 财务调整金额 → 差额自动回冲/补扣押金。
 - **全链路追溯**：每个环节落 `trace_event`（谁、何时、对哪个单据、做了什么），`GET /api/trace/appointments/{id}` 一次还原"谁堆放、谁审核、谁清走、费用如何产生"。
@@ -58,9 +63,9 @@ docker compose up -d --build
 ./verify.sh        # 需应用已启动且数据库为初始状态；BASE 环境变量可改地址
 ```
 
-脚本用 curl 驱动 55 项断言，覆盖：认证鉴权、主流程（上报→审核→派单→称重→处置→计费→追溯）、容量规则（拒绝→围挡→通过）、尾号限行、称重异常自动投诉、消防通道/混入生活垃圾违规扣款、施工队罚款返还押金、费用争议调整回冲、超时未清与三端看板。
+脚本用 curl 驱动 91 项断言，覆盖：认证鉴权、主流程（上报→审核→派单→称重→处置→计费→追溯）、容量规则（拒绝→围挡→通过）、尾号限行、称重异常自动投诉、消防通道/混入生活垃圾违规扣款、施工队罚款返还押金、费用争议调整回冲、超时未清与三端看板、消防通道违规堆放处置（建单带出施工队联系方式/限期移走仅警告入信用/超期自动通知物业经理与业主/二次巡查未移走按占用时长扣款/邻居投诉触发扣款/施工队信用分）。
 
-**本题实际执行的验证**：本仓库交付前已在本地（MariaDB 10.11 兼容 MySQL 协议 + `APP_MQ_ENABLED=false` 降级模式）完整执行 `verify.sh`，**55/55 项全部通过**；`mvn package` 编译打包通过。Docker 镜像构建与 compose 编排未在本环境执行（无 Docker 守护进程），配置按标准多阶段构建与健康检查编写。
+**本题实际执行的验证**：本仓库交付前已在本地（MariaDB 10.11 兼容 MySQL 协议 + `APP_MQ_ENABLED=false` 降级模式）完整执行 `verify.sh`，**91/91 项全部通过**；`mvn package` 编译打包通过；并单独验证了超期定时任务在无人手动触发时自动扫描并向物业经理、业主各发送 1 条通知。Docker 镜像构建与 compose 编排未在本环境执行（无 Docker 守护进程），配置按标准多阶段构建与健康检查编写。
 
 ## 本地开发
 
@@ -78,7 +83,9 @@ mvn spring-boot:run
 ```
 
 有 RabbitMQ 时省略 `APP_MQ_ENABLED=false`（默认 true），事件经 `waste.exchange`（topic）投递：
-`appointment.approved`（通知清运派单）、`weigh.recorded`（自动计费）、`violation.created`（押金扣款）、`complaint.created`（通知物业）。
+`appointment.approved`（通知清运派单）、`weigh.recorded`（自动计费）、`violation.created`（押金扣款）、`complaint.created`（通知物业；占用消防通道投诉同时触发在办整改任务按规则扣款）。
+
+> 消防通道整改的超期通知不依赖 MQ，由应用内定时扫描（`fire-lane-scan-ms`，默认 60s）完成；也可由物业调 `POST /api/fire-lane/scan-overdue` 立即处理。
 
 ## API 概览（详见 Swagger UI）
 
@@ -95,6 +102,8 @@ mvn spring-boot:run
 | 投诉 | `POST /api/complaints`、`PUT /{id}/handle`、`GET /api/complaints` |
 | 账单 | `GET /api/bills`、`POST /{id}/pay`、`POST /{id}/adjust`（争议调整） |
 | 违规 | `GET /api/violations`、`POST /{id}/waive` |
+| 消防通道整改 | `POST/GET /api/fire-lane/rectifications`、`POST /{id}/clear`、`POST /{id}/re-patrol`、`POST /{id}/waive`、`POST /api/fire-lane/scan-overdue`、`GET /api/fire-lane/credit` |
+| 通知 | `GET /api/notifications`、`POST /{id}/read` |
 | 看板 | `GET /api/dashboard/property`、`/collector`、`/finance` |
 | 追溯 | `GET /api/trace/appointments/{id}`、`GET /api/trace/code/{traceCode}` |
 
@@ -116,9 +125,9 @@ mvn spring-boot:run
 │   ├── auth/                 # 令牌认证与角色鉴权
 │   ├── common/               # 统一响应、异常、追溯日志、单号生成
 │   ├── config/               # Web/RabbitMQ/OpenAPI/规则参数/演示数据
-│   ├── controller/           # 13 个 REST 控制器（另有认证控制器在 auth/）
+│   ├── controller/           # 15 个 REST 控制器（另有认证控制器在 auth/）
 │   ├── entity|enums|repository/
 │   ├── mq/                   # EventBus + 队列监听器
-│   └── service/              # 13 个业务服务
+│   └── service/              # 业务服务（含消防通道整改 FireLaneService、通知、超期扫描调度）
 └── src/main/resources/application.yml
 ```

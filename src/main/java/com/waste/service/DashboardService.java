@@ -27,6 +27,7 @@ public class DashboardService {
     private final VehicleRepository vehicleRepo;
     private final BillRepository billRepo;
     private final WastePointRepository wastePointRepo;
+    private final FireLaneRectificationRepository fireLaneRepo;
 
     /** 物业端：各楼栋预约、超时未清、违规堆放、押金扣款、清运公司履约 */
     public Map<String, Object> property() {
@@ -83,6 +84,25 @@ public class DashboardService {
 
         // 垃圾点容量
         result.put("wastePoints", wastePointRepo.findAll());
+
+        // 消防通道违规堆放整改任务
+        List<FireLaneRectification> fireLaneTasks = fireLaneRepo.findAll();
+        Map<String, Object> fireLane = new LinkedHashMap<>();
+        fireLane.put("total", fireLaneTasks.size());
+        fireLane.put("pending", fireLaneTasks.stream()
+                .filter(t -> t.getStatus() == RectifyStatus.PENDING).count());
+        fireLane.put("overdueNotified", fireLaneTasks.stream()
+                .filter(t -> t.getStatus() == RectifyStatus.OVERDUE_NOTIFIED).count());
+        fireLane.put("warningOnly", fireLaneTasks.stream()
+                .filter(t -> t.getStatus() == RectifyStatus.RECTIFIED
+                        && t.getDeductionAmount().compareTo(BigDecimal.ZERO) == 0).count());
+        fireLane.put("deducted", fireLaneTasks.stream()
+                .filter(t -> t.getStatus() == RectifyStatus.DEDUCTED).count());
+        fireLane.put("totalDeducted", fireLaneTasks.stream()
+                .map(FireLaneRectification::getDeductionAmount).reduce(BigDecimal.ZERO, BigDecimal::add));
+        fireLane.put("tasks", fireLaneTasks.stream()
+                .sorted(Comparator.comparing(FireLaneRectification::getId).reversed()).limit(20).toList());
+        result.put("fireLaneRectifications", fireLane);
 
         // 清运公司履约：准时率、异常率
         result.put("collectorPerformance", collectorPerformance());

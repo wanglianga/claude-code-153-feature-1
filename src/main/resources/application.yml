@@ -44,6 +44,19 @@ waste:
     weigh-anomaly-threshold-pct: 20.0  # 称重偏差异常阈值（%）
     capacity-warn-ratio: 0.9     # 垃圾点容量预警比例（超过则不允许直接通过预约）
     late-tolerance-minutes: 30   # 车辆迟到容忍分钟数
+    # —— 消防通道违规堆放整改规则 ——
+    fire-lane-rectify-hours: 24          # 夜间巡查建单后的整改时限（小时）
+    fire-lane-base-fine: 200.0           # 影响消防通道基础扣款（元）
+    fire-lane-overdue-block-fine: 100.0  # 超期每满一个时间块加扣（元）
+    fire-lane-overdue-block-hours: 12    # 超期加扣时间块（小时，不足一块按一块）
+    fire-lane-overdue-max-fine: 500.0    # 超期加扣上限（元）
+    fire-lane-complaint-fine: 200.0      # 邻居投诉额外扣款（元）
+    fire-lane-re-patrol-fine: 200.0      # 二次巡查仍未移走额外扣款（元）
+    fire-lane-fine-cap: 1000.0           # 单任务扣款总额上限（元）
+    team-credit-full-score: 100          # 施工队信用满分
+    team-credit-warning-score: 5         # 限期内移走（警告）扣分
+    team-credit-deduct-score: 20         # 扣款（实质影响）扣分
+    fire-lane-scan-ms: 60000             # 超期整改任务扫描周期（毫秒）
 
 springdoc:
   swagger-ui:

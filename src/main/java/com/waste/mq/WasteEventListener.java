@@ -2,13 +2,14 @@ package com.waste.mq;
 
 import com.waste.config.RabbitConfig;
 import com.waste.service.BillingService;
+import com.waste.service.FireLaneService;
 import com.waste.service.ViolationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Component;
 
-/** 业务事件监听：称重→计费、违规→押金扣款、预约→通知清运、投诉→通知物业 */
+/** 业务事件监听：称重→计费、违规→押金扣款、预约→通知清运、投诉→通知物业/消防通道整改扣款 */
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -16,6 +17,7 @@ public class WasteEventListener {
 
     private final BillingService billingService;
     private final ViolationService violationService;
+    private final FireLaneService fireLaneService;
 
     /** 统一入口：MQ 与同步降级共用 */
     public void dispatch(String routingKey, Long entityId) {
@@ -48,9 +50,10 @@ public class WasteEventListener {
         violationService.processDeduction(Long.parseLong(violationId));
     }
 
-    /** 投诉产生 → 通知物业处理 */
+    /** 投诉产生 → 通知物业处理；占用消防通道投诉 → 触发整改任务按规则扣款 */
     @RabbitListener(queues = RabbitConfig.Q_COMPLAINT)
     public void onComplaintCreated(String complaintId) {
         log.info("【通知物业】新投诉 {} 待处理", complaintId);
+        fireLaneService.onComplaintCreated(Long.parseLong(complaintId));
     }
 }
