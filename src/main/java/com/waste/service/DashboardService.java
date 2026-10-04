@@ -27,6 +27,8 @@ public class DashboardService {
     private final VehicleRepository vehicleRepo;
     private final BillRepository billRepo;
     private final WastePointRepository wastePointRepo;
+    private final RectificationTaskRepository rectTaskRepo;
+    private final TeamCreditRecordRepository creditRepo;
 
     /** 物业端：各楼栋预约、超时未清、违规堆放、押金扣款、清运公司履约 */
     public Map<String, Object> property() {
@@ -83,6 +85,39 @@ public class DashboardService {
 
         // 垃圾点容量
         result.put("wastePoints", wastePointRepo.findAll());
+
+        // 消防通道整改任务
+        List<RectificationTask> rectTasks = rectTaskRepo.findAll();
+        Map<String, Object> rect = new LinkedHashMap<>();
+        rect.put("open", rectTasks.stream().filter(t -> t.getStatus() == RectificationStatus.OPEN).count());
+        rect.put("overdue", rectTasks.stream().filter(t -> t.getStatus() == RectificationStatus.OVERDUE).count());
+        rect.put("warningCleared", rectTasks.stream().filter(t -> t.getStatus() == RectificationStatus.CLEARED).count());
+        rect.put("penalized", rectTasks.stream().filter(t -> t.getStatus() == RectificationStatus.PENALIZED).count());
+        rect.put("totalDeduction", rectTasks.stream()
+                .map(t -> t.getDeductionAmount() == null ? BigDecimal.ZERO : t.getDeductionAmount())
+                .reduce(BigDecimal.ZERO, BigDecimal::add));
+        rect.put("activeTasks", rectTasks.stream()
+                .filter(t -> t.getStatus() == RectificationStatus.OPEN || t.getStatus() == RectificationStatus.OVERDUE)
+                .sorted(Comparator.comparing(RectificationTask::getDeadline)).toList());
+        result.put("rectificationTasks", rect);
+
+        // 施工队信用
+        Map<String, List<TeamCreditRecord>> creditByTeam = creditRepo.findAll().stream()
+                .collect(Collectors.groupingBy(TeamCreditRecord::getConstructionTeam));
+        List<Map<String, Object>> teamCredits = new ArrayList<>();
+        for (var entry : creditByTeam.entrySet()) {
+            List<TeamCreditRecord> records = entry.getValue();
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("constructionTeam", entry.getKey());
+            m.put("warnings", records.stream().filter(c -> "WARNING".equals(c.getType())).count());
+            m.put("penalties", records.stream().filter(c -> "PENALTY".equals(c.getType())).count());
+            m.put("totalScoreDeducted", records.stream().map(TeamCreditRecord::getScoreDeducted)
+                    .reduce(0, Integer::sum));
+            m.put("totalFine", records.stream().map(TeamCreditRecord::getFineAmount)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add));
+            teamCredits.add(m);
+        }
+        result.put("teamCredit", teamCredits);
 
         // 清运公司履约：准时率、异常率
         result.put("collectorPerformance", collectorPerformance());

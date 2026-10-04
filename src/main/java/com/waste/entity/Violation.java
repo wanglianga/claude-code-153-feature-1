@@ -25,6 +25,7 @@ public class Violation {
 
     private Long reportId;
     private Long appointmentId;
+    private Long rectificationTaskId; // 关联夜间巡查整改任务（可空）
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 32)

@@ -163,6 +163,97 @@ check "清运看板-派单与车辆" "$DC" '"vehicles"'
 DF=$(curl -s "$BASE/api/dashboard/finance?period=$PERIOD" -H "$AUTH_FIN")
 check "财务看板-四类账单汇总" "$DF" '"PROPERTY_ADVANCE"'
 
+echo "== 6. 消防通道夜间巡查整改：限内移走仅警告 =="
+AGO2H=$(date -d "2 hours ago" +%FT%T)
+# 场景A：业主张四(REG2) 的施工队堆放木板，未阻断通道；限内移走 → 仅警告不扣款
+CA=$(curl -s -X POST "$BASE/api/rectifications" -H "$AUTH_PROP" -H "$CT" -d "{\"registrationId\":$REG2,\"scenePhotos\":\"http://img/patrol-a1.jpg\",\"fireLaneLocation\":\"2号楼一层东侧消防通道\",\"material\":\"木板\",\"impactScope\":\"半幅堆放，人员可绕行\",\"fireLaneBlocked\":false,\"deadlineMinutes\":120}")
+TASKA=$(echo "$CA" | J '.data.id')
+check "巡查生成整改任务(OPEN+限期)" "$CA" '"status":"OPEN"'
+check "任务带房号装修登记信息" "$CA" '"roomNumber":"502"'
+check "任务带施工队联系方式" "$CA" '"teamContact":"李工/13800002001"'
+check "任务带现场照片与巡查时间" "$CA" '"scenePhotos":"http://img/patrol-a1.jpg"'
+
+CLA=$(curl -s -X POST "$BASE/api/rectifications/$TASKA/clear" -H "$AUTH_WORKER" -H "$CT" -d '{"clearPhotos":"http://img/clear-a1.jpg"}')
+check "限内移走→CLEARED仅警告" "$CLA" '"status":"CLEARED"'
+check "警告不扣款(扣款0元)" "$CLA" '"deductionAmount":0.00'
+check "结案说明为警告" "$CLA" "仅记录警告"
+check "押金保持320不变" "$(curl -s "$BASE/api/registrations/$REG2" -H "$AUTH_PROP")" '"depositBalance":320.00'
+VIOA=$(curl -s "$BASE/api/violations" -H "$AUTH_PROP")
+check "关联违规单随警告豁免" "$VIOA" '"rectificationTaskId":'"$TASKA"
+CRW=$(curl -s "$BASE/api/rectifications/team-credits" -H "$AUTH_WORKER")
+check "施工队信用写入警告记录" "$CRW" '"type":"WARNING"'
+check "警告信用扣0分/0元" "$CRW" '"scoreDeducted":0'
+
+echo "== 7. 消防通道整改：阻断通道+超时未移走→自动通知→二次巡查扣款 =="
+# 场景B：张三(REG1)施工队木板阻断消防通道，巡查时间=2小时前，时限0分钟，立即超时
+CB=$(curl -s -X POST "$BASE/api/rectifications" -H "$AUTH_PROP" -H "$CT" -d "{\"registrationId\":1,\"scenePhotos\":\"http://img/patrol-b1.jpg,http://img/patrol-b2.jpg\",\"fireLaneLocation\":\"1号楼一层西侧消防通道\",\"material\":\"木板\",\"impactScope\":\"阻断1号楼西侧疏散出口，3米通道被占2米\",\"fireLaneBlocked\":true,\"patrolTime\":\"$AGO2H\",\"deadlineMinutes\":0}")
+TASKB=$(echo "$CB" | J '.data.id')
+check "阻断通道整改任务建立" "$CB" '"fireLaneBlocked":true'
+SCAN=$(curl -s -X POST "$BASE/api/rectifications/scan-overdue" -H "$AUTH_PROP")
+check "超时扫描通知≥1个任务" "$SCAN" '"overdueNotified":'
+TB=$(curl -s "$BASE/api/rectifications/$TASKB" -H "$AUTH_PROP")
+check "任务置为OVERDUE" "$TB" '"status":"OVERDUE"'
+check "记录消防通道占用时长(分钟)" "$TB" '"occupationMinutes":'
+check "记录超时通知时间" "$TB" '"overdueNotifiedAt":'
+N_MGR=$(curl -s "$BASE/api/notifications?receiverRole=PROPERTY_MANAGER" -H "$AUTH_PROP")
+check "自动通知物业经理(超时)" "$N_MGR" "消防通道堆放整改任务超时"
+check "通知含影响范围" "$N_MGR" "影响范围"
+N_TASK=$(curl -s "$BASE/api/notifications/task/$TASKB" -H "$AUTH_PROP")
+check "通知含二次巡查结论字段" "$N_TASK" "二次巡查"
+N_OWNER=$(curl -s "$BASE/api/notifications/mine" -H "$AUTH_OWNER")
+check "自动通知业主本人(短信)" "$N_OWNER" '"receiverRole":"OWNER"'
+check "业主通知含施工队与房号" "$N_OWNER" "宏远装修队"
+SCAN2=$(curl -s -X POST "$BASE/api/rectifications/scan-overdue" -H "$AUTH_PROP")
+check "重复扫描幂等(本次0个)" "$SCAN2" '"overdueNotified":0'
+
+# 二次巡查：仍在占用 → 阻断500 + 超时2小时×50 = 600元
+PB=$(curl -s -X POST "$BASE/api/rectifications/$TASKB/second-patrol" -H "$AUTH_PROP" -H "$CT" -d '{"result":"STILL_THERE","photos":"http://img/patrol-b3.jpg","note":"二次巡查木板仍堆放在消防通道，通道仍被阻断"}')
+check "二巡仍占用→PENALIZED" "$PB" '"status":"PENALIZED"'
+check "扣款600=阻断500+超时2小时×50" "$PB" '"deductionAmount":600.00'
+check "二巡结果作为扣款依据" "$PB" '"secondPatrolResult":"STILL_THERE"'
+check "占用时长约120分钟" "$PB" '"occupationMinutes":120'
+check "影响范围写入结案依据" "$PB" "阻断1号楼西侧疏散出口"
+REG1B=$(curl -s "$BASE/api/registrations/1" -H "$AUTH_PROP")
+check "押金1940-600=1340" "$REG1B" '"depositBalance":1340.00'
+DEP1=$(curl -s "$BASE/api/registrations/1/deposit-log" -H "$AUTH_PROP")
+check "押金流水记录600扣款" "$DEP1" '"amount":600.00'
+TEAM650=$(curl -s "$BASE/api/bills?type=CONSTRUCTION_TEAM" -H "$AUTH_FIN")
+check "施工队600元罚款账单" "$TEAM650" '"amount":600.00'
+VIOB=$(curl -s "$BASE/api/violations?registrationId=1" -H "$AUTH_PROP")
+check "违规单扣款600已结案" "$VIOB" '"deductionAmount":600.00'
+CRB=$(curl -s "$BASE/api/rectifications/team-credits?team=%E5%AE%8F%E8%BF%9C%E8%A3%85%E4%BF%AE%E9%98%9F" -H "$AUTH_PROP")
+check "信用写入处罚记录" "$CRB" '"type":"PENALTY"'
+check "处罚信用扣5分" "$CRB" '"scoreDeducted":5'
+
+echo "== 8. 消防通道整改：邻居投诉联动扣款（含押金不足垫付） =="
+CC=$(curl -s -X POST "$BASE/api/rectifications" -H "$AUTH_PROP" -H "$CT" -d "{\"registrationId\":$REG2,\"scenePhotos\":\"http://img/patrol-c1.jpg\",\"fireLaneLocation\":\"2号楼一层东侧消防通道\",\"material\":\"木板\",\"impactScope\":\"占用东侧通道约1米\",\"fireLaneBlocked\":false,\"deadlineMinutes\":120}")
+TASKC=$(echo "$CC" | J '.data.id')
+check "邻居投诉前任务待整改" "$CC" '"status":"OPEN"'
+CPLNB=$(curl -s -X POST "$BASE/api/complaints" -H "$AUTH_OWNER" -H "$CT" -d "{\"type\":\"FIRE_LANE\",\"targetRegistrationId\":$REG2,\"description\":\"2栋502施工队木板占了消防通道，老人轮椅过不去\"}")
+check "邻居投诉占用消防通道" "$CPLNB" '"type":"FIRE_LANE"'
+TC1=$(curl -s "$BASE/api/rectifications/$TASKC" -H "$AUTH_PROP")
+check "投诉联动任务直接扣款结案" "$TC1" '"status":"PENALIZED"'
+check "邻居投诉扣款200" "$TC1" '"deductionAmount":200.00'
+check "押金320-200=120" "$(curl -s "$BASE/api/registrations/$REG2" -H "$AUTH_PROP")" '"depositBalance":120.00'
+# 第二次投诉 → 追加200，押金不足(120)→物业垫付80
+curl -s -X POST "$BASE/api/complaints" -H "$AUTH_OWNER" -H "$CT" -d "{\"type\":\"FIRE_LANE\",\"targetRegistrationId\":$REG2,\"description\":\"再次投诉：消防通道仍有木板\"}" >/dev/null
+TC2=$(curl -s "$BASE/api/rectifications/$TASKC" -H "$AUTH_PROP")
+check "二次投诉追加扣款累计400" "$TC2" '"deductionAmount":400.00'
+check "押金不足扣至0" "$(curl -s "$BASE/api/registrations/$REG2" -H "$AUTH_PROP")" '"depositBalance":0.00'
+ADVB=$(curl -s "$BASE/api/bills?type=PROPERTY_ADVANCE" -H "$AUTH_FIN")
+check "缺口80元生成物业垫付单" "$ADVB" '"amount":80.00'
+
+echo "== 9. 整改看板与数据权限 =="
+DP2=$(curl -s "$BASE/api/dashboard/property" -H "$AUTH_PROP")
+check "物业看板-整改任务统计" "$DP2" '"rectificationTasks"'
+check "物业看板-在办整改任务" "$DP2" '"activeTasks"'
+check "物业看板-施工队信用汇总" "$DP2" '"teamCredit"'
+check "物业看板-处罚案件计数" "$DP2" '"penalized":2'
+LIST_OWNER2=$(curl -s "$BASE/api/rectifications" -H "Authorization: Bearer $OWNER2_T")
+check "业主只见本户整改任务(不见REG1任务)" "$(echo "$LIST_OWNER2" | J "[.data[] | select(.id==$TASKB)] | length")" "0"
+LIST_WORKER=$(curl -s "$BASE/api/rectifications" -H "$AUTH_WORKER")
+check "施工队可见本队整改任务" "$LIST_WORKER" "$TASKA"
+
 echo ""
 echo "==================================="
 echo "验证结果: 通过 $PASS 项, 失败 $FAIL 项"

@@ -27,6 +27,7 @@ public class ComplaintService {
 
     private final ComplaintRepository complaintRepo;
     private final BillRepository billRepo;
+    private final RectificationService rectificationService;
     private final EventBus eventBus;
     private final TraceLogger traceLogger;
 
@@ -55,6 +56,10 @@ public class ComplaintService {
         complaintRepo.save(c);
         traceLogger.record(appointmentId, "COMPLAINT", c.getId(), user, "COMPLAINT_CREATE",
                 "投诉[" + type + "]: " + description);
+        // 邻居投诉占用消防通道 → 联动未结整改任务按规则扣款并写信用
+        if (type == ComplaintType.FIRE_LANE && registrationId != null) {
+            rectificationService.onNeighborComplaint(c);
+        }
         eventBus.publish(RabbitConfig.RK_COMPLAINT_CREATED, c.getId());
         return c;
     }

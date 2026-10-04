@@ -39,8 +39,15 @@ waste:
     extra-bag-multiplier: 1.5    # 临时加袋费率倍数
     avg-bag-weight-kg: 25.0      # 每袋预估重量（kg），用于称重异常比对
     collector-price-per-ton: 120.0  # 清运公司结算单价（元/吨）
-    fire-lane-fine: 200.0        # 消防通道堆放罚款（元/次）
+    fire-lane-fine: 200.0        # 消防通道堆放罚款（元/次，每日上报自动检测）
     mixed-waste-fine: 100.0      # 混入生活垃圾罚款（元/次）
+    fire-lane-rectify-deadline-minutes: 120  # 夜间巡查整改任务时限（分钟）
+    fire-lane-block-fine: 500.0  # 整改任务：影响消防通道正常使用的基础扣款（元）
+    neighbor-complaint-fine: 200.0 # 整改任务：被邻居投诉追加扣款（元/次）
+    overdue-fine-per-hour: 50.0  # 整改任务：超时未移走每小时追加扣款（元）
+    overdue-fine-cap: 1000.0     # 整改任务：超时追加扣款上限（元）
+    warning-credit-score: 0      # 限期内移走仅警告的信用扣分
+    penalty-credit-score: 5      # 扣款处罚的信用扣分
     weigh-anomaly-threshold-pct: 20.0  # 称重偏差异常阈值（%）
     capacity-warn-ratio: 0.9     # 垃圾点容量预警比例（超过则不允许直接通过预约）
     late-tolerance-minutes: 30   # 车辆迟到容忍分钟数
